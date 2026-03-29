@@ -1,0 +1,33 @@
+[project]
+name = "tapo-p110-ev-charger"
+version = "0.0.8"
+description = "A tool to allow a Tapo P110 smart plug (connected to an AC mains EV charger) to charge your EV."
+authors = [
+    {name = "Paul Austen",email = "pjaos@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11.2,<4"
+dependencies = [
+]
+
+[tool.poetry]
+packages = [{include = "tapo_p110_ev_charger", from = "src"}]
+
+[tool.poetry.dependencies]
+pytest = "*"
+nicegui = "^3.9.0"
+tapo = "^0.8.12"
+p3lib = "^1.1.155"
+pillow = "*"
+
+[tool.poetry.scripts]
+tapo_p110_ev_charger = "tapo_p110_ev_charger.tapo_p110_ev_charger:main"
+tapo_p110_ev_charger_gui = "tapo_p110_ev_charger.tapo_p110_ev_charger_gui:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
