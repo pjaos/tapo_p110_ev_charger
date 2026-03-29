@@ -1,0 +1,6 @@
+linux/*.tar.gz
+src/tapo_p110_ev_charger/__pycache__/
+tests/__pycache__/
+linux/*.tar.gz
+.pytest_cache/
+./.ropeproject
