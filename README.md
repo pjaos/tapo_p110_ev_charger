@@ -115,7 +115,7 @@ Session history is saved to `tapo_ev_history.json` in the working directory. Use
 |---|---|
 | `-h / --help` | Show this help message and exit |
 | `-p PORT / --port PORT` | The TCP port to start the nicegui server on (default=8080) |
-| `-n / --no_web_launch` | Do not open web browser. By default a local web browser session is started |
+| `-n / --no_web_launch` | Do not open web browser. By default a local web browser is opened connected to the web server providing the GUI. |
 | `-d / --debug` | Enable verbose debug logging |
 | `--enable_auto_start` | Register the tool to start on system boot |
 | `--disable_auto_start` | Un-register the tool to start on system boot |
