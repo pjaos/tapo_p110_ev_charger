@@ -1,7 +1,7 @@
 [project]
 name = "tapo-p110-ev-charger"
 version = "0.0.8"
-description = "A tool to allow a Tapo P110 smart plug (connected to an AC mains EV charger) to charge your EV."
+description = "An app to allow a Tapo P110 smart plug (connected to an AC mains EV charger) to charge your EV."
 authors = [
     {name = "Paul Austen",email = "pjaos@gmail.com"}
 ]
