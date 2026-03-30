@@ -60,7 +60,8 @@ This starts the nicegui server and opens a web browser connected to it.
 
 ## Configuration
 
-Config is saved to `tapo_ev_config.json` in the working directory.
+Config is saved to `tapo_ev_config.json` in the config folder. On a Linux machine this
+will be the ~/.config/tapo_p110_ev_charger folder. On other platforms the ~/.tapo_p110_ev_charger folder will be used.
 
 ### Tapo P110 Credentials
 
