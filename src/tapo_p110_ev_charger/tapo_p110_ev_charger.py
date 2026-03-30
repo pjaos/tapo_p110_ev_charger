@@ -44,7 +44,6 @@ def get_app_cfg_path():
         app_cfg_path = home_path / Path('.tapo_p110_ev_charger')
         if not app_cfg_path.is_dir():
             app_cfg_path.mkdir(parents=True, exist_ok=True)
-
     return app_cfg_path
 
 def get_config_file():
@@ -841,6 +840,10 @@ def gui_main(show: bool, port: int) -> None:
 def main() -> None:
     """@brief Program entry point"""
     uio = UIO()
+
+    app_cfg_path = get_app_cfg_path()
+    uio.info(f"Config path: {app_cfg_path}")
+
     options = None
     try:
         parser = argparse.ArgumentParser(description="An app to allow a Tapo P110 smart plug (connected to 13A mains EV charger) to charge your EV.",
