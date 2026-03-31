@@ -28,6 +28,8 @@ from p3lib.helper import get_program_version, getHomePath
 
 from nicegui import ui
 
+__version__ = get_program_version('tapo_p110_ev_charger')
+
 # ── Config persistence ────────────────────────────────────────────────────────
 
 def get_app_cfg_path():
@@ -307,7 +309,7 @@ def build_page() -> None:
         ui.icon("electric_car", size="28px").style("color: var(--accent)")
         with ui.column().style("gap:0"):
             ui.html('<span class="app-title">TAPO EV CHARGER</span>')
-            ui.html('<span class="app-sub">P110 Smart Plug Controller</span>')
+            ui.html(f'<span class="app-sub">P110 Smart Plug Controller &nbsp;·&nbsp; v{__version__}</span>')
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
     with ui.tabs().classes("w-full").style("background: var(--surface); padding: 0 16px;") as tabs:
@@ -446,8 +448,11 @@ def build_page() -> None:
                     )
 
                     # Email (thread executor so event loop isn't blocked)
+                    # Reload config fresh so email settings are always current
+                    # regardless of when the session was started
+                    notify_cfg = load_config()
                     await asyncio.get_event_loop().run_in_executor(
-                        None, send_email_notification, cfg,
+                        None, send_email_notification, notify_cfg,
                         session.kwh_needed, session.estimated_cost, session.duration_min
                     )
 
@@ -858,8 +863,7 @@ def main() -> None:
         uio.logAll(True)
         uio.enableSyslog(True, programName="tapo_p110_ev_charger")
 
-        prog_version = get_program_version('tapo_p110_ev_charger')
-        uio.info(f"tapo_p110_ev_charger: V{prog_version}")
+        uio.info(f"tapo_p110_ev_charger: v{__version__}")
 
         handled = BootManager.HandleOptions(uio, options, True)
         if not handled:
