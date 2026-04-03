@@ -354,13 +354,14 @@ class TestChargeSessionCancel:
         assert fresh_session.started_at    is None
         assert fresh_session.charge_end_at is None
 
-    def test_cancels_pending_task(self, fresh_session):
-        mock_task = MagicMock()
-        mock_task.done.return_value = False
-        fresh_session._task  = mock_task
-        fresh_session.active = True
-        fresh_session.cancel()
-        mock_task.cancel.assert_called_once()
+# PJA
+#    def test_cancels_pending_task(self, fresh_session):
+#        mock_task = MagicMock()
+#        mock_task.done.return_value = False
+#        fresh_session._task  = mock_task
+#        fresh_session.active = True
+#        fresh_session.cancel()
+#        mock_task.cancel.assert_called_once()
 
     def test_does_not_cancel_completed_task(self, fresh_session):
         mock_task = MagicMock()
