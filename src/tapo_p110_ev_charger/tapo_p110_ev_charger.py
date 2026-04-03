@@ -16,6 +16,8 @@ import asyncio
 import smtplib
 import ssl
 import argparse
+import queue
+import threading
 from datetime import datetime, time as dt_time, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -206,13 +208,14 @@ def send_email_notification(cfg: dict, kwh: float, cost: float, duration_min: fl
 
 class ChargeSession:
     def __init__(self) -> None:
-        self.active:          bool              = False
-        self.kwh_needed:      float             = 0.0
-        self.estimated_cost:  float             = 0.0
-        self.duration_min:    float             = 0.0
+        self.active:          bool               = False
+        self.kwh_needed:      float              = 0.0
+        self.estimated_cost:  float              = 0.0
+        self.duration_min:    float              = 0.0
         self.started_at:      Optional[datetime] = None
         self.charge_end_at:   Optional[datetime] = None
-        self._task:           Optional[asyncio.Task] = None  # type: ignore[type-arg]
+        self._thread:         Optional[threading.Thread] = None
+        self._stop_event:     threading.Event    = threading.Event()
 
     def calc_estimates(self, current_pct: float, target_pct: float, cfg: dict) -> None:
         delta               = max(0.0, target_pct - current_pct)
@@ -230,8 +233,7 @@ class ChargeSession:
         return max(0.0, (self.charge_end_at - datetime.now()).total_seconds() / 60.0)
 
     def cancel(self) -> None:
-        if self._task and not self._task.done():
-            self._task.cancel()
+        self._stop_event.set()
         self.active        = False
         self.started_at    = None
         self.charge_end_at = None
@@ -422,49 +424,105 @@ def build_page() -> None:
                 )
 
             # ── Action buttons ────────────────────────────────────────────────
+            # Worker thread sends dicts to gui_queue; a ui.timer on the GUI
+            # thread drains the queue and acts on each message — keeping all
+            # UI calls strictly on the GUI thread.
+            #
+            # Message keys:
+            #   notify  : {"notify": "text", "type": "positive"|"negative"|...}
+            #   status  : {"status": True}   – triggers a plug status refresh
+            #   complete: {"complete": True} – session finished, log & notify
+            #   browser_notify: {"browser_notify": "body text"}
+
+            gui_queue: queue.Queue = queue.Queue()
+
+            def _charge_worker(cfg: dict, delay_seconds: float) -> None:
+                """Runs in a plain thread — no NiceGUI calls allowed here."""
+                # Wait for scheduled start if needed
+                if delay_seconds > 0:
+                    if session._stop_event.wait(timeout=delay_seconds):
+                        return  # cancelled during wait
+                    # Turn on plug
+                    import asyncio as _asyncio
+                    ok = _asyncio.run(tapo_turn_on(cfg))
+                    if not ok:
+                        gui_queue.put({"notify": "Failed to switch on plug — check config",
+                                       "type": "negative"})
+                        session.active = False
+                        return
+                    gui_queue.put({"notify": "⚡ Charging started", "type": "positive"})
+
+                session.started_at    = datetime.now()
+                session.charge_end_at = session.started_at + timedelta(minutes=session.duration_min)
+                gui_queue.put({"status": True})
+
+                # Sleep in 1-second ticks so stop_event is checked frequently
+                total_seconds = int(session.duration_min * 60)
+                for _ in range(total_seconds):
+                    if session._stop_event.wait(timeout=1):
+                        return  # cancelled
+                if not session.active:
+                    return
+
+                # Auto-stop: turn off, log, send email
+                import asyncio as _asyncio
+                _asyncio.run(tapo_turn_off(cfg))
+
+                record = {
+                    "date":         datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "kwh":          round(session.kwh_needed, 3),
+                    "cost":         round(session.estimated_cost, 4),
+                    "duration_min": round(session.duration_min, 1),
+                }
+                append_history(record)
+
+                notify_cfg = load_config()
+                send_email_notification(
+                    notify_cfg,
+                    session.kwh_needed,
+                    session.estimated_cost,
+                    session.duration_min,
+                    )
+
+                h2, m2     = int(session.duration_min // 60), int(session.duration_min % 60)
+                dur_str    = f"{h2}h {m2:02d}m" if h2 else f"{m2}m"
+                cost_str   = f" · £{session.estimated_cost:.2f}" if session.estimated_cost > 0 else ""
+                notif_body = f"{session.kwh_needed:.1f} kWh in {dur_str}{cost_str}"
+
+                session.active        = False
+                session.charge_end_at = None
+                gui_queue.put({"browser_notify": notif_body})
+                gui_queue.put({"notify": "✅ Charging complete — plug switched off",
+                                "type": "positive"})
+                gui_queue.put({"status": True})
+
+            async def _drain_queue() -> None:
+                """Called by ui.timer — runs on the GUI thread, safe to call ui.*"""
+                while not gui_queue.empty():
+                    msg = gui_queue.get_nowait()
+                    if "notify" in msg:
+                        ui.notify(msg["notify"], type=msg.get("type", "info"))
+                    if "status" in msg:
+                        await refresh_status()
+                    if "browser_notify" in msg:
+                        ui.run_javascript(
+                            f'sendBrowserNotification("⚡ EV Charging Complete",'
+                            f' {json.dumps(msg["browser_notify"])});'
+                        )
+
+            # Drain the queue every second
+            ui.timer(0.1, _drain_queue)
+
             with ui.row().classes("w-full gap-3"):
-
-                async def _charge_complete(cfg: dict) -> None:
-                    """Turn off plug, log session, send notifications."""
-                    await tapo_turn_off(cfg)
-                    record = {
-                        "date":         datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "kwh":          round(session.kwh_needed, 3),
-                        "cost":         round(session.estimated_cost, 4),
-                        "duration_min": round(session.duration_min, 1),
-                    }
-                    append_history(record)
-
-                    h2, m2   = int(session.duration_min // 60), int(session.duration_min % 60)
-                    dur_str  = f"{h2}h {m2:02d}m" if h2 else f"{m2}m"
-                    cost_str = f"£{session.estimated_cost:.2f}" if session.estimated_cost > 0 else ""
-                    notif_body = f"{session.kwh_needed:.1f} kWh in {dur_str}"
-                    if cost_str:
-                        notif_body += f" · {cost_str}"
-
-                    # Browser push
-                    ui.run_javascript(
-                        f'sendBrowserNotification("⚡ EV Charging Complete", {json.dumps(notif_body)});'
-                    )
-
-                    # Email (thread executor so event loop isn't blocked)
-                    # Reload config fresh so email settings are always current
-                    # regardless of when the session was started
-                    notify_cfg = load_config()
-                    await asyncio.get_event_loop().run_in_executor(
-                        None, send_email_notification, notify_cfg,
-                        session.kwh_needed, session.estimated_cost, session.duration_min
-                    )
-
-                    session.active        = False
-                    session.charge_end_at = None
-                    ui.notify("✅ Charging complete — plug switched off", type="positive")
-                    await refresh_status()
 
                 async def start_charge() -> None:
                     cfg       = load_config()
                     cur       = float(inp_current.value or 0)
                     tgt       = float(inp_target.value or 0)
+
+                    # PJA, debug for testing quick charges
+                    # tgt = cur + 0.01
+
                     start_str = (inp_start_time.value or "").strip()
 
                     if tgt <= cur:
@@ -472,24 +530,9 @@ def build_page() -> None:
                         return
 
                     session.calc_estimates(cur, tgt, cfg)
+                    session._stop_event.clear()
 
-                    async def _run_session(delay_seconds: float = 0) -> None:
-                        if delay_seconds > 0:
-                            await asyncio.sleep(delay_seconds)
-                            ok = await tapo_turn_on(cfg)
-                            if not ok:
-                                ui.notify("Failed to switch on plug — check config", type="negative")
-                                session.active = False
-                                return
-                            ui.notify(f"⚡ Charging started at {start_str}", type="positive")
-
-                        session.started_at    = datetime.now()
-                        session.charge_end_at = session.started_at + timedelta(minutes=session.duration_min)
-                        await refresh_status()
-                        await asyncio.sleep(session.duration_min * 60)
-                        if session.active:
-                            await _charge_complete(cfg)
-
+                    delay = 0.0
                     if start_str:
                         try:
                             sh, sm = map(int, start_str.split(":"))
@@ -502,23 +545,28 @@ def build_page() -> None:
                         if start <= now:
                             start += timedelta(days=1)
                         delay = (start - now).total_seconds()
-                        session.active        = True
                         session.charge_end_at = start + timedelta(minutes=session.duration_min)
-                        session._task         = asyncio.ensure_future(_run_session(delay_seconds=delay))
+
+                        # PJA, debug for testing quick charges
+                        # session.charge_end_at = start + timedelta(minutes=2)
+
                         ui.notify(f"⏳ Scheduled to start at {start_str}", type="info")
-                        await refresh_status()
                     else:
                         ok = await tapo_turn_on(cfg)
                         if not ok:
                             ui.notify("Failed to switch on plug — check config", type="negative")
                             return
-                        session.active = True
-                        session._task  = asyncio.ensure_future(_run_session())
                         ui.notify("⚡ Charging started!", type="positive")
+
+                    session.active  = True
+                    session._thread = threading.Thread(
+                        target=_charge_worker, args=(cfg, delay), daemon=True
+                    )
+                    session._thread.start()
+                    await refresh_status()
 
                 async def stop_charge() -> None:
                     cfg = load_config()
-                    # Log partial session if one was running
                     if session.active and session.started_at:
                         elapsed_min = (datetime.now() - session.started_at).total_seconds() / 60.0
                         rate        = cfg["charge_rate_kw"]
@@ -829,7 +877,7 @@ def build_page() -> None:
 
 def gui_main(show: bool, port: int) -> None:
     ui.run(
-        title="Tapo EV Charger",
+        title=f"Tapo EV Charger v{__version__}",
         host="0.0.0.0",
         port=port,
         favicon="⚡",
