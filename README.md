@@ -2,6 +2,8 @@
 
 A NiceGUI **3.9** web app for controlling a TP-Link Tapo P110 smart plug connected to an EV charger. Designed to run on a Raspberry Pi and be accessed from a phone browser. The app should run on any Linux, MAC or Windows machine that has the correct version of python installed.
 
+![alt text](images/tapo_p110_ev_charger.png "Tapo P110 EV Charger")
+
 ## Features
 
 - **Charge tab** — Enter current and target battery %, optional scheduled start time, live power draw, live countdown to auto-stop, and instant kWh/duration/cost estimates.
