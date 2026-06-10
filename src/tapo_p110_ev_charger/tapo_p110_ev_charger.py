@@ -74,6 +74,13 @@ DEFAULT_CONFIG: dict = {
     "smtp_port": 587,
     "smtp_user": "",
     "smtp_password": "",
+    "last_current_pct": 20,
+    "last_target_pct": 80,
+    "charge_presets": [
+        {"label": "Daily",     "target_pct": 80},
+        {"label": "Long trip", "target_pct": 90},
+        {"label": "Full",      "target_pct": 100},
+    ],
 }
 
 
@@ -330,13 +337,45 @@ def build_page() -> None:
             with ui.element("div").classes("card"):
                 ui.html('<div class="section-title">Session Setup</div>')
 
+                _page_cfg = load_config()
+                _last_current = int(_page_cfg.get("last_current_pct", 20))
+                _last_target  = int(_page_cfg.get("last_target_pct",  80))
+
                 with ui.row().classes("w-full gap-4"):
-                    inp_current = ui.number(
-                        "Current battery %", value=20, min=0, max=100, step=1, format="%.0f"
-                    ).classes("flex-1")
-                    inp_target = ui.number(
-                        "Target battery %", value=80, min=0, max=100, step=1, format="%.0f"
-                    ).classes("flex-1")
+                    with ui.column().classes("flex-1").style("gap:2px;"):
+                        inp_current = ui.number(
+                            "Current battery %", value=_last_current, min=0, max=100, step=1, format="%.0f"
+                        ).classes("w-full")
+                        ui.html(
+                            f'<div style="font-size:11px;color:var(--muted);margin-top:2px;">'
+                            f'last used: {_last_current}%</div>'
+                        )
+                    with ui.column().classes("flex-1").style("gap:2px;"):
+                        inp_target = ui.number(
+                            "Target battery %", value=_last_target, min=0, max=100, step=1, format="%.0f"
+                        ).classes("w-full")
+                        ui.html(
+                            f'<div style="font-size:11px;color:var(--muted);margin-top:2px;">'
+                            f'last used: {_last_target}%</div>'
+                        )
+
+                # ── Target presets ────────────────────────────────────────────
+                with ui.element("div").style(
+                    "margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;"
+                ):
+                    ui.html('<span style="font-size:11px;color:var(--muted);font-family:Space Mono,monospace;'
+                            'letter-spacing:1px;text-transform:uppercase;">Target:</span>')
+                    _presets_ref: list[dict] = list(_page_cfg.get("charge_presets", []))
+                    for _p in _presets_ref:
+                        def _make_preset_handler(target: int):
+                            def _apply(_) -> None:
+                                inp_target.set_value(target)
+                                update_estimates()
+                            return _apply
+                        ui.button(
+                            f'{_p["label"]} ({_p["target_pct"]}%)',
+                            on_click=_make_preset_handler(int(_p["target_pct"]))
+                        ).classes("ghost-btn").style("font-size:11px; padding:4px 10px;")
 
                 inp_start_time = ui.input(
                     "Start time (HH:MM) — leave blank to start immediately",
@@ -528,6 +567,12 @@ def build_page() -> None:
                     if tgt <= cur:
                         ui.notify("Target % must be greater than current %", type="warning")
                         return
+
+                    # Persist the values for next time
+                    _save_cfg = load_config()
+                    _save_cfg["last_current_pct"] = int(cur)
+                    _save_cfg["last_target_pct"]  = int(tgt)
+                    save_config(_save_cfg)
 
                     session.calc_estimates(cur, tgt, cfg)
                     session._stop_event.clear()
@@ -739,6 +784,61 @@ def build_page() -> None:
                     '</div>'
                 )
 
+            # ── Charge presets ────────────────────────────────────────────────
+            with ui.element("div").classes("card"):
+                ui.html('<div class="section-title">Charge Presets</div>')
+                ui.html(
+                    '<div style="font-size:12px;color:var(--muted);margin-bottom:12px;">'
+                    'Quick-select target % buttons shown on the Charge tab. '
+                    'Add, rename or remove presets here.'
+                    '</div>'
+                )
+                charge_presets: list[dict] = list(cfg.get("charge_presets", []))
+                presets_container = ui.column().classes("w-full").style("gap:0")
+
+                def render_presets() -> None:
+                    presets_container.clear()
+                    with presets_container:
+                        for i, preset in enumerate(charge_presets):
+                            with ui.element("div").classes("tariff-row"):
+                                ui.html(
+                                    f'<span class="tariff-time">{preset["target_pct"]}%</span>'
+                                    f'<span class="tariff-rate">{preset["label"]}</span>'
+                                )
+                                def _make_preset_remover(idx: int):
+                                    def _remove(_) -> None:
+                                        charge_presets.pop(idx)
+                                        render_presets()
+                                    return _remove
+                                ui.button(icon="delete", on_click=_make_preset_remover(i)
+                                          ).props("flat dense").style("color:var(--warn);")
+
+                render_presets()
+
+                with ui.element("div").style(
+                    "margin-top:10px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;"
+                ):
+                    new_preset_label = ui.input("Label", placeholder="e.g. Long trip").style("width:150px")
+                    new_preset_pct   = ui.number("Target %", value=80, min=1, max=100,
+                                                  step=1, format="%.0f").style("width:110px")
+
+                    def add_preset() -> None:
+                        lbl = (new_preset_label.value or "").strip()
+                        if not lbl:
+                            ui.notify("Please enter a label", type="warning")
+                            return
+                        pct = int(new_preset_pct.value or 80)
+                        if any(p["label"].lower() == lbl.lower() for p in charge_presets):
+                            ui.notify(f'Preset "{lbl}" already exists', type="warning")
+                            return
+                        charge_presets.append({"label": lbl, "target_pct": pct})
+                        new_preset_label.set_value("")
+                        render_presets()
+
+                    ui.button("+ ADD", on_click=add_preset).classes("accent-btn").style(
+                        "padding:8px 16px;font-size:12px;"
+                    )
+
             # ── Electricity tariff ────────────────────────────────────────────
             with ui.element("div").classes("card"):
                 ui.html('<div class="section-title">Electricity Tariff</div>')
@@ -852,6 +952,9 @@ def build_page() -> None:
 
             # ── Save ──────────────────────────────────────────────────────────
             def save_all() -> None:
+                # Preserve keys written independently (last session %) so they
+                # are not overwritten with defaults on every config save.
+                _existing = load_config()
                 save_config({
                     "tapo_ip":              inp_ip.value or "",
                     "tapo_email":           inp_email.value or "",
@@ -859,12 +962,15 @@ def build_page() -> None:
                     "battery_size_kwh":     float(inp_batt.value or 60),
                     "charge_rate_kw":       float(inp_rate.value or 3.3),
                     "tariff_periods":       list(tariff_periods),
+                    "charge_presets":       list(charge_presets),
                     "notify_email_enabled": chk_email.value,
                     "notify_email_to":      inp_email_to.value or "",
                     "smtp_host":            inp_smtp_host.value or "smtp.gmail.com",
                     "smtp_port":            int(inp_smtp_port.value or 587),
                     "smtp_user":            inp_smtp_user.value or "",
                     "smtp_password":        inp_smtp_pw.value or "",
+                    "last_current_pct":     _existing.get("last_current_pct", 20),
+                    "last_target_pct":      _existing.get("last_target_pct",  80),
                 })
                 ui.notify("✅ Configuration saved", type="positive")
 
